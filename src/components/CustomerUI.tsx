@@ -1,16 +1,18 @@
 import { useState, useEffect } from 'react';
 import { db, OperationType, handleFirestoreError } from '../lib/firebase';
-import { collection, query, orderBy, getDocs, addDoc, serverTimestamp } from 'firebase/firestore';
-import { Product, Category, OrderItem, SUGAR_LEVELS, ICE_LEVELS, ADDITIONS } from '../types';
+import { collection, query, orderBy, getDocs, addDoc, serverTimestamp, onSnapshot, doc, updateDoc, deleteDoc, Timestamp } from 'firebase/firestore';
+import { Product, Category, OrderItem, Order, OrderStatus, SUGAR_LEVELS, ICE_LEVELS, ADDITIONS } from '../types';
 import { motion, AnimatePresence } from 'motion/react';
-import { Plus, Minus, ShoppingCart, X, Check, Coffee } from 'lucide-react';
+import { Plus, Minus, ShoppingCart, X, Check, Coffee, Clock, Play, CheckCircle, XCircle, Trash2, List } from 'lucide-react';
 
 export function CustomerUI() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  const [orders, setOrders] = useState<Order[]>([]);
   const [cart, setCart] = useState<OrderItem[]>([]);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [showOrderModal, setShowOrderModal] = useState(false);
+  const [showOrderQueue, setShowOrderQueue] = useState(false);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
@@ -23,6 +25,15 @@ export function CustomerUI() {
 
   useEffect(() => {
     fetchData();
+    const q = query(collection(db, 'orders'), orderBy('createdAt', 'desc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const ordersData = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Order[];
+      setOrders(ordersData);
+    });
+    return () => unsubscribe();
   }, []);
 
   const fetchData = async () => {
@@ -90,7 +101,7 @@ export function CustomerUI() {
         updatedAt: serverTimestamp(),
       });
       setCart([]);
-      alert('訂單已提交！請至櫃檯結帳。');
+      alert('訂單已提交！');
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'orders');
     } finally {
@@ -98,128 +109,243 @@ export function CustomerUI() {
     }
   };
 
+  const updateOrderStatus = async (orderId: string, status: OrderStatus) => {
+    try {
+      await updateDoc(doc(db, 'orders', orderId), {
+        status,
+        updatedAt: serverTimestamp()
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `orders/${orderId}`);
+    }
+  };
+
+  const deleteOrder = async (orderId: string) => {
+    if (!confirm('確定要刪除此訂單記錄嗎？')) return;
+    try {
+      await deleteDoc(doc(db, 'orders', orderId));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `orders/${orderId}`);
+    }
+  };
+
+  const formatTime = (ts: any) => {
+    if (!ts) return '...';
+    try {
+      const date = ts instanceof Timestamp ? ts.toDate() : new Date();
+      return date.toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' });
+    } catch {
+      return '';
+    }
+  };
+
   if (loading) return <div className="flex justify-center p-20 text-[#00519a] font-bold">載入菜單中...</div>;
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-      {/* Menu Column */}
-      <div className="lg:col-span-2 space-y-8">
-        {categories.length === 0 && (
-          <div className="bg-blue-50 p-8 rounded-xl text-center border-2 border-dashed border-blue-200">
-            <p className="text-blue-600 mb-4">目前還沒有飲品資料，請先至後台初始化資料。</p>
-          </div>
-        )}
-        
-        {categories.map(category => (
-          <div key={category.id} className="space-y-4">
-            <h2 className="text-xl font-bold text-[#00519a] border-l-4 border-[#00519a] pl-3 flex items-center gap-2">
-              <span className="w-8 h-8 bg-[#00519a] text-white rounded-full flex items-center justify-center text-sm">
-                杯
-              </span>
-              {category.name}
-            </h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {products
-                .filter(p => p.category === category.id)
-                .map(product => (
-                  <button
-                    key={product.id}
-                    onClick={() => openOrderModal(product)}
-                    className="flex justify-between items-center p-4 bg-white rounded-xl shadow-sm hover:shadow-md transition-shadow border border-gray-100 group"
-                  >
-                    <div className="text-left">
-                      <div className="font-medium group-hover:text-[#00519a] transition-colors">{product.name}</div>
-                      <div className="text-xs text-gray-400 mt-1 uppercase tracking-wider">
-                        {product.description || '經典茶飲'}
-                      </div>
-                    </div>
-                    <div className="flex gap-4 text-sm font-bold text-gray-600">
-                      <div className="flex flex-col items-end">
-                        <span className="text-[10px] text-gray-400 font-normal">M</span>
-                        <span>${product.price_m}</span>
-                      </div>
-                      <div className="flex flex-col items-end">
-                        <span className="text-[10px] text-gray-400 font-normal">L</span>
-                        <span>${product.price_l}</span>
-                      </div>
-                    </div>
-                  </button>
-                ))}
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {/* Cart Column */}
-      <div className="lg:col-span-1">
-        <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-6 sticky top-24">
-          <div className="flex items-center gap-2 text-xl font-bold text-[#00519a] mb-6 border-b pb-4">
-            <ShoppingCart className="w-6 h-6" />
-            <span>我的購物車</span>
-            <span className="ml-auto bg-[#fbdb00] text-[#00519a] px-2 py-0.5 rounded text-sm">{cart.length}</span>
-          </div>
-
-          <div className="space-y-4 max-h-[50vh] overflow-y-auto mb-6 pr-2">
-            {cart.length === 0 ? (
-              <div className="text-center py-10 text-gray-400">
-                <Coffee className="w-12 h-12 mx-auto mb-3 opacity-20" />
-                <p>還沒有選購任何飲品</p>
-              </div>
-            ) : (
-              cart.map((item, index) => (
-                <div key={index} className="flex gap-3 bg-gray-50 p-3 rounded-lg relative group">
-                  <div className="flex-1">
-                    <div className="font-bold text-gray-800">{item.name} <span className="text-[#00519a]">({item.size})</span></div>
-                    <div className="text-xs text-gray-500 mt-1">
-                      {item.sugar} / {item.ice} 
-                      {item.additions.length > 0 && ` + ${item.additions.join(', ')}`}
-                    </div>
-                    <div className="mt-2 flex justify-between items-center">
-                      <div className="text-sm font-bold text-[#00519a]">x{item.quantity}</div>
-                      <div className="font-mono text-sm">${item.price * item.quantity}</div>
-                    </div>
-                  </div>
-                  <button 
-                    onClick={() => removeFromCart(index)}
-                    className="p-1 text-gray-300 hover:text-red-500 transition-colors"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-              ))
-            )}
-          </div>
-
-          <div className="border-t pt-4">
-            <div className="flex justify-between items-center text-lg font-bold mb-6">
-              <span>總金額</span>
-              <span className="text-2xl text-[#00519a] font-mono">${totalAmount}</span>
-            </div>
-            
-            <button
-              onClick={handleSubmitOrder}
-              disabled={cart.length === 0 || submitting}
-              className={`w-full py-4 rounded-xl font-bold text-lg shadow-lg flex items-center justify-center gap-2 transition-all ${
-                cart.length > 0 && !submitting
-                  ? 'bg-[#fbdb00] text-[#00519a] hover:bg-[#ffe536] hover:scale-[1.02] active:scale-[0.98]'
-                  : 'bg-gray-100 text-gray-400 cursor-not-allowed'
-              }`}
-            >
-              {submitting ? '提交中...' : (
-                <>
-                  <Check className="w-6 h-6" />
-                  <span>確認下單</span>
-                </>
-              )}
-            </button>
-            <p className="text-center text-[10px] text-gray-400 mt-3">
-              大杯抵2元 ・ 中杯抵1元 (模擬優惠)
-            </p>
-          </div>
+    <div className="space-y-6">
+      {/* View Toggle */}
+      <div className="flex justify-center mb-4">
+        <div className="bg-white p-1 rounded-full shadow-inner border flex border-gray-200">
+          <button
+            onClick={() => setShowOrderQueue(false)}
+            className={`px-6 py-2 rounded-full font-bold transition-all ${
+              !showOrderQueue ? 'bg-[#00519a] text-white' : 'text-gray-400'
+            }`}
+          >
+            點餐菜單
+          </button>
+          <button
+            onClick={() => setShowOrderQueue(true)}
+            className={`px-6 py-2 rounded-full font-bold flex items-center gap-2 transition-all ${
+              showOrderQueue ? 'bg-[#00519a] text-white' : 'text-gray-400'
+            }`}
+          >
+            <List className="w-4 h-4" />
+            訂單列表 ({orders.length})
+          </button>
         </div>
       </div>
 
-      {/* Order Options Modal */}
+      <AnimatePresence mode="wait">
+        {!showOrderQueue ? (
+          <motion.div
+            key="menu"
+            initial={{ opacity: 0, x: -10 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: 10 }}
+            className="grid grid-cols-1 lg:grid-cols-3 gap-6"
+          >
+            {/* Menu Column */}
+            <div className="lg:col-span-2 space-y-8">
+              {categories.length === 0 && (
+                <div className="bg-blue-50 p-8 rounded-xl text-center border-2 border-dashed border-blue-200">
+                  <p className="text-blue-600 mb-4">目前還沒有飲品資料，請點擊上方「初始化菜單」按鈕。</p>
+                </div>
+              )}
+              
+              {categories.map(category => (
+                <div key={category.id} className="space-y-4">
+                  <h2 className="text-xl font-bold text-[#00519a] border-l-4 border-[#00519a] pl-3 flex items-center gap-2">
+                    {category.name}
+                  </h2>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {products
+                      .filter(p => p.category === category.id)
+                      .map(product => (
+                        <button
+                          key={product.id}
+                          onClick={() => openOrderModal(product)}
+                          className="flex justify-between items-center p-4 bg-white rounded-xl shadow-sm hover:shadow-md transition-shadow border border-gray-100 group"
+                        >
+                          <div className="text-left">
+                            <div className="font-medium group-hover:text-[#00519a] transition-colors">{product.name}</div>
+                            <div className="text-xs text-gray-400 mt-1 uppercase tracking-wider">
+                              經典 50嵐 茶飲
+                            </div>
+                          </div>
+                          <div className="flex gap-4 text-sm font-bold text-gray-600">
+                            <div className="flex flex-col items-end">
+                              <span className="text-[10px] text-gray-400 font-normal">M</span>
+                              <span>${product.price_m}</span>
+                            </div>
+                            <div className="flex flex-col items-end">
+                              <span className="text-[10px] text-gray-400 font-normal">L</span>
+                              <span>${product.price_l}</span>
+                            </div>
+                          </div>
+                        </button>
+                      ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Cart Column */}
+            <div className="lg:col-span-1">
+              <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-6 sticky top-24">
+                <div className="flex items-center gap-2 text-xl font-bold text-[#00519a] mb-6 border-b pb-4">
+                  <ShoppingCart className="w-6 h-6" />
+                  <span>點購明細</span>
+                  <span className="ml-auto bg-[#fbdb00] text-[#00519a] px-2 py-0.5 rounded text-sm">{cart.length}</span>
+                </div>
+
+                <div className="space-y-4 max-h-[50vh] overflow-y-auto mb-6 pr-2">
+                  {cart.length === 0 ? (
+                    <div className="text-center py-10 text-gray-400">
+                      <Coffee className="w-12 h-12 mx-auto mb-3 opacity-10" />
+                      <p>尚未選擇飲品</p>
+                    </div>
+                  ) : (
+                    cart.map((item, index) => (
+                      <div key={index} className="flex gap-3 bg-gray-50 p-3 rounded-lg relative group">
+                        <div className="flex-1">
+                          <div className="font-bold text-gray-800">{item.name} <span className="text-[#00519a]">({item.size})</span></div>
+                          <div className="text-xs text-gray-500 mt-1">
+                            {item.sugar} / {item.ice} 
+                            {item.additions.length > 0 && ` + ${item.additions.join(', ')}`}
+                          </div>
+                          <div className="mt-2 flex justify-between items-center">
+                            <div className="text-sm font-bold text-[#00519a]">x{item.quantity}</div>
+                            <div className="font-mono text-sm">${item.price * item.quantity}</div>
+                          </div>
+                        </div>
+                        <button 
+                          onClick={() => removeFromCart(index)}
+                          className="p-1 text-gray-300 hover:text-red-500 transition-colors"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                <div className="border-t pt-4">
+                  <div className="flex justify-between items-center text-lg font-bold mb-6">
+                    <span>總計</span>
+                    <span className="text-2xl text-[#00519a] font-mono">${totalAmount}</span>
+                  </div>
+                  
+                  <button
+                    onClick={handleSubmitOrder}
+                    disabled={cart.length === 0 || submitting}
+                    className={`w-full py-4 rounded-xl font-bold text-lg shadow-lg flex items-center justify-center gap-2 transition-all ${
+                      cart.length > 0 && !submitting
+                        ? 'bg-[#fbdb00] text-[#00519a] hover:bg-[#ffe536] hover:scale-[1.02] active:scale-[0.98]'
+                        : 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                    }`}
+                  >
+                    {submitting ? '提交中...' : (
+                      <>
+                        <Check className="w-6 h-6" />
+                        <span>確認下單</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        ) : (
+          <motion.div
+            key="queue"
+            initial={{ opacity: 0, x: 10 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -10 }}
+            className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4"
+          >
+            {orders.length === 0 ? (
+              <div className="col-span-full py-20 text-center text-gray-400 bg-white rounded-2xl border-2 border-dashed">
+                <Clock className="w-16 h-16 mx-auto mb-4 opacity-10" />
+                <p>目前沒有訂單紀錄</p>
+              </div>
+            ) : (
+              orders.map(order => (
+                <div key={order.id} className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden flex flex-col">
+                  <div className="p-4 border-b flex justify-between items-center">
+                    <div>
+                      <span className="text-[10px] font-mono text-gray-400 block tracking-tighter">ORD-{order.id.slice(0, 5).toUpperCase()}</span>
+                      <span className="font-bold text-gray-700">{formatTime(order.createdAt)}</span>
+                    </div>
+                    <div className={`px-2 py-1 rounded-full text-[10px] font-bold border ${
+                      order.status === 'pending' ? 'bg-orange-50 text-orange-600 border-orange-100' :
+                      order.status === 'preparing' ? 'bg-blue-50 text-blue-600 border-blue-100' :
+                      order.status === 'completed' ? 'bg-green-50 text-green-600 border-green-100' :
+                      'bg-red-50 text-red-600 border-red-100'
+                    }`}>
+                      {order.status === 'pending' ? '等待中' : 
+                       order.status === 'preparing' ? '製作中' :
+                       order.status === 'completed' ? '已完成' : '已取消'}
+                    </div>
+                  </div>
+                  <div className="p-4 flex-1 space-y-2">
+                    {order.items.map((item, idx) => (
+                      <div key={idx} className="text-xs flex justify-between">
+                        <span className="font-medium text-gray-600">{item.name} ({item.size}) x {item.quantity}</span>
+                        <span className="text-gray-400 italic">{item.sugar}/{item.ice}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="px-4 py-3 bg-gray-50 border-t flex items-center justify-between">
+                    <span className="font-bold text-[#00519a]">${order.totalAmount}</span>
+                    <div className="flex gap-1">
+                      {order.status === 'pending' && (
+                        <button onClick={() => updateOrderStatus(order.id, 'preparing')} className="p-1.5 bg-blue-500 text-white rounded-lg"><Play className="w-3 h-3" /></button>
+                      )}
+                      {order.status === 'preparing' && (
+                        <button onClick={() => updateOrderStatus(order.id, 'completed')} className="p-1.5 bg-green-500 text-white rounded-lg"><CheckCircle className="w-3 h-3" /></button>
+                      )}
+                      <button onClick={() => deleteOrder(order.id)} className="p-1.5 bg-white border text-red-400 rounded-lg"><Trash2 className="w-3 h-3" /></button>
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Order Options Modal - (Keep same as before) */}
       <AnimatePresence>
         {showOrderModal && selectedProduct && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -241,7 +367,7 @@ export function CustomerUI() {
                 <p className="text-sm opacity-80 mt-1 uppercase tracking-widest">請選擇您的個人喜好</p>
               </div>
 
-              <div className="p-8 space-y-8 max-h-[70vh] overflow-y-auto">
+              <div className="p-8 space-y-8 max-h-[60vh] overflow-y-auto">
                 {/* Size */}
                 <section>
                   <label className="text-sm font-bold text-gray-400 uppercase block mb-3">大小</label>
